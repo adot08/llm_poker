@@ -115,6 +115,11 @@ class PokerGame:
             # 只有当有玩家真正raise后，才设置last_raiser
             self.action_player_idx = self.get_next_active_player_idx(bb_pos)
         else:
+            # 如果仅剩一个非all-in的活跃玩家，则本轮无需行动（直接摊牌流程）
+            non_all_in_active = [p for p in self.players if p.is_active and not p.is_all_in]
+            if len(non_all_in_active) < 2:
+                self.action_player_idx = -1
+                return
             self.action_player_idx = self.get_next_active_player_idx(self.dealer_pos)
 
     def handle_action(self, player: Player, action: str, amount: int = 0):
