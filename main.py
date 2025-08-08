@@ -58,7 +58,7 @@ def main():
         winner_stats = results['winner_stats']
         
         # 获取初始玩家列表和他们的LLM类型
-        player_llm_map = {p.name: p.llm_type for p in game_manager.game.players}
+        player_llm_map = {p.name: p.llm_type for p in getattr(game_manager, 'all_players', game_manager.game.players)}
         
         # 按最终筹码排序
         sorted_players = sorted(final_chips.items(), key=lambda item: item[1], reverse=True)
