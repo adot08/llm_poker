@@ -6,6 +6,12 @@ from config import GAME_CONFIG
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+import sys
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 def main():
     parser = argparse.ArgumentParser(description="Multi-Agent LLM 德州扑克模拟器")
