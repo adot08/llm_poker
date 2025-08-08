@@ -5,26 +5,21 @@
 
 # LLM API配置
 LLM_CONFIGS = {
-    "qwen3": {
-        "url": "http://10.10.4.83:9998/v1",
-        "model": "qwen3-instruct",
+    "model_1": {
+        "url": "http://your_url:9998/v1",
+        "model": "your_model",
         "api_key": "dummy"  # 如果不需要API key可以设为dummy
     },
-    "qwen2.5": {
-        "url": "http://10.10.2.71:8007/v1", 
-        "model": "Qwen/Qwen2.5-72B-Instruct-Raw",
+    "model_2": {
+        "url": "http://your_url:8007/v1", 
+        "model": "your_model",
         "api_key": "dummy"
     },
-    # "deepseek": {
-    #     "url": "http://10.10.4.84:8001/v1",
-    #     "model": "deepseek-r1-0528-awq",
-    #     "api_key": "dummy"
-    # },
-    "gpt-oss-20b":{
-        "url": "http://10.10.4.83:8227/v1",
-        "model": "gpt-oss-20b",
+    "model_3": {
+        "url": "http://your_url:8001/v1",
+        "model": "deepseek-r1-0528-awq",
         "api_key": "dummy"
-    }
+    },
 }
 
 # 游戏配置
@@ -47,5 +42,5 @@ PROMPT_CONFIG = {
 - `raise [金额]`：如果你决定加注。**[金额]必须是你加注后，在当前轮次的总下注额**。例如，当前下注是20，你想加注到80，你应该回复 `raise 80`。
 - `all-in`：如果你决定全下所有筹码。
 
-请只回复一个动作指令，不要包含任何解释或额外文字。"""
+请在<action>...</action>标签中只回复一个动作指令，不要包含任何解释或额外文字。"""
 }
