@@ -23,12 +23,14 @@ class GameManager:
             small_blind=GAME_CONFIG['small_blind'],
             big_blind=GAME_CONFIG['big_blind']
         )
+        # 记录所有初始玩家（即使后续出局也保留）
+        self.all_players: List[Player] = list(self.game.players)
         self.llm_clients = {
             llm_type: LLMClient(llm_type) for llm_type in llm_types
         }
         self.system_prompt = PROMPT_CONFIG["system_prompt"]
         self.logger = GameLogger()
-        self.winner_stats = {p.name: 0 for p in self.game.players}
+        self.winner_stats = {p.name: 0 for p in self.all_players}
         self.action_history = []
 
     def play_game(self, num_hands: int):
@@ -43,7 +45,7 @@ class GameManager:
             self._play_hand(hand_num)
             time.sleep(3)
 
-        final_chips = {p.name: p.chips for p in self.game.players}
+        final_chips = {p.name: p.chips for p in self.all_players}
         self.logger.log_session_end(final_chips, self.winner_stats)
         return self.get_final_results()
 
@@ -195,6 +197,8 @@ class GameManager:
         
         if self.action_history:
             state.append("\n--- 本手牌下注历史 ---")
+            state.append("\n--- 额外说明：'加注到'的意思是本轮某玩家的总下注筹码 ---")
+            state.append("\n--- 注意，系统不会在牌局进行中维护底池状态，底池边池的状态请根据自己的初始筹码计算 ---")
             state.extend(self.action_history)
 
         state.append("\n--- 你的回合 ---")
@@ -240,6 +244,6 @@ class GameManager:
 
     def get_final_results(self):
         return {
-            "final_chips": {p.name: p.chips for p in self.game.players},
+            "final_chips": {p.name: p.chips for p in self.all_players},
             "winner_stats": self.winner_stats
         }
