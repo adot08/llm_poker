@@ -1,161 +1,98 @@
 # Multi-Agent LLM 德州扑克模拟器
 
-一个基于LLM的多智能体德州扑克游戏模拟器，支持纯文本状态维护和多种LLM模型。
+一个基于LLM的多智能体德州扑克游戏模拟器，现在拥有更智能的LLM交互和更精确的游戏状态提示。
 
-## 功能特点
+## 🚀 主要功能
 
-- 🎮 **纯文本状态维护**: 所有游戏状态都以纯文本形式维护和展示
-- 🤖 **多LLM支持**: 支持多个LLM模型作为玩家
-- 🎯 **完整德州扑克规则**: 包含preflop、flop、turn、river四个轮次
-- 💰 **筹码管理**: 完整的筹码下注、跟注、加注、全下机制
-- 📊 **详细统计**: 游戏结果和玩家表现统计
-- 🎨 **美观界面**: 使用Rich库提供彩色终端界面
-- 📝 **详细日志**: 完整的游戏记录和LLM输入输出日志
-- 👁️ **旁观者视角**: 显示所有玩家的手牌和决策过程
+-   **🧠 智能LLM决策**: LLM会先输出详细的思考过程，然后使用`<action>`标签给出最终决策，极大提升了行为的可解释性。
+-   **🎯 精确的状态提示**: 为LLM精心设计了上下文提示，包含每手牌的初始筹码、带轮次分隔的完整下注历史，以及为当前玩家定制的回合信息。
+-   **🤖 多LLM支持**: 可通过`config.py`轻松配置和切换多种LLM模型作为玩家。
+-   **룰 完整的德州扑克规则**: 实现了完整的德州扑克游戏逻辑，包括盲注、Preflop、Flop、Turn、River以及最终摊牌。
+-   **💰 健壮的筹码管理**: 支持check, call, raise, all-in, fold等所有标准动作，并能正确处理边池逻辑。
+-   **📝 详细的日志系统**: 每一手牌的完整进程，包括LLM的思考过程和最终决策，都会被记录下来，方便复盘和分析。
+-   **👁️ 日志查看工具**: 提供了`log_viewer.py`，可以方便地查看和筛选历史游戏记录。
 
-## 支持的LLM模型
+## 🛠️ 安装
 
-- **Qwen3**: `http://10.10.4.83:9998/v1` - `qwen3-instruct`
-- **Qwen2.5**: `http://10.10.2.71:8007/v1` - `Qwen/Qwen2.5-72B-Instruct-Raw`
+1.  克隆项目:
+    ```bash
+    git clone <repository-url>
+    cd LLMPoker
+    ```
 
-## 安装
+2.  安装依赖:
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-1. 克隆项目：
-```bash
-git clone <repository-url>
-cd LLMPoker
-```
+## 🎮 使用方法
 
-2. 安装依赖：
-```bash
-pip install -r requirements.txt
-```
-
-## 使用方法
-
-### 基本用法
+### 命令行运行
 
 ```bash
-# 使用默认设置运行游戏 (4个玩家，1000筹码，10手牌)
+# 使用默认设置运行游戏 (4个玩家, 1000起始筹码, 运行10手牌)
 python main.py
 
-# 自定义玩家数量和筹码
-python main.py --players 6 --chips 2000 --hands 20
-
-# 详细输出模式
-python main.py --verbose
+# 自定义玩家数量、起始筹码和游戏手数
+python main.py --players 6 --chips 2000 --hands 50
 ```
 
 ### 命令行参数
 
-- `--players, -p`: 玩家数量 (2-6，默认: 4)
-- `--chips, -c`: 起始筹码数量 (默认: 1000)
-- `--hands, -n`: 游戏手数 (默认: 10)
-- `--verbose, -v`: 详细输出模式
+-   `--players, -p`: 玩家数量 (默认: 4)
+-   `--chips, -c`: 起始筹码 (默认: 1000)
+-   `--hands, -n`: 游戏手数 (默认: 10)
 
-### 示例
+### 查看游戏日志
 
 ```bash
-# 6个玩家，每人2000筹码，玩30手牌
-python main.py -p 6 -c 2000 -n 30
-
-# 2个玩家快速游戏
-python main.py -p 2 -c 500 -n 5
-```
-
-### 日志查看
-```bash
-# 列出所有游戏会话
+# 列出所有已记录的游戏会话
 python log_viewer.py --list
 
-# 查看特定会话
-python log_viewer.py --session 20250807_104812
+# 查看指定会话的摘要
+python log_viewer.py --session <session_id>
 
-# 查看特定手牌
-python log_viewer.py --session 20250807_104812 --hand 2
+# 查看指定会话的特定手牌详情
+python log_viewer.py --session <session_id> --hand <hand_number>
 
-# 查看LLM详细信息
-python log_viewer.py --session 20250807_104812 --hand 2 --llm-details
-
-# 查看特定玩家的LLM详情
-python log_viewer.py --session 20250807_104812 --hand 2 --llm-details --player Player_3
+# 在查看手牌时，包含LLM的详细思考过程和原始输出
+python log_viewer.py --session <session_id> --hand <hand_number> --llm-details
 ```
 
-## 游戏规则
+## ⚙️ 配置
 
-### 基本规则
-- 德州扑克标准规则
-- 小盲注: 10筹码，大盲注: 20筹码
-- 支持的动作: check(过牌), call(跟注), raise(加注), fold(弃牌), all-in(全下)
+所有关键配置都在 `config.py` 中进行：
 
-### 游戏流程
-1. **Preflop**: 发手牌，收取盲注，进行第一轮下注
-2. **Flop**: 发3张公共牌，进行第二轮下注
-3. **Turn**: 发第4张公共牌，进行第三轮下注
-4. **River**: 发第5张公共牌，进行最后一轮下注
-5. **Showdown**: 摊牌，确定获胜者，分配底池
+-   **LLM API配置**: 设置不同模型的API端点、密钥和模型名称。
+-   **游戏参数**: 调整大小盲注、起始筹码等。
+-   **系统提示词**: 修改给LLM的系统级指令，以调整其整体策略风格。
 
-### LLM决策
-每个LLM玩家会根据以下信息做出决策：
-- 自己的手牌
-- 公共牌
-- 当前筹码数量
-- 其他玩家的下注情况
-- 游戏轮次
-
-## 项目结构
+## 🏗️ 项目结构
 
 ```
 LLMPoker/
 ├── main.py              # 主程序入口
-├── game_manager.py      # 游戏管理器
-├── poker_game.py        # 扑克游戏引擎
-├── llm_client.py        # LLM客户端
+├── game_manager.py      # 游戏管理器，负责整体游戏流程控制
+├── poker_engine.py      # 核心扑克游戏引擎，处理规则和状态
+├── llm_client.py        # LLM客户端，负责与大语言模型API交互
 ├── logger.py            # 日志记录模块
 ├── log_viewer.py        # 日志查看工具
 ├── config.py            # 配置文件
-├── requirements.txt     # 依赖包
-├── test_*.py           # 测试脚本
-└── README.md           # 项目说明
+└── requirements.txt     # 项目依赖
 ```
 
-## 配置
+## 🔧 技术栈
 
-可以在 `config.py` 中修改以下配置：
+-   **Python 3.x**
+-   **openai>=1.3.0**: 用于与LLM API进行交互
+-   **poker**: 用于处理部分扑克牌的逻辑
+-   **rich**: 用于美化终端输出
+-   **python-dotenv**: 用于管理环境变量
 
-- LLM API端点和模型
-- 游戏参数（盲注、起始筹码等）
-- LLM提示词模板
+## 🤝 贡献
 
-## 技术栈
+我们修复了一系列的bug，包括`AttributeError`、`KeyError`以及preflop阶段的逻辑漏洞，并极大地提升了提示词的质量。欢迎提交Issue和Pull Request来进一步改进这个项目！
 
-- **poker**: 德州扑克规则引擎
-- **openai**: LLM API客户端
-- **rich**: 终端美化库
-- **typing**: 类型提示
-
-## 注意事项
-
-1. 确保LLM API服务可用
-2. 网络连接稳定，避免API调用失败
-3. 游戏过程中可以按Ctrl+C中断
-
-## 故障排除
-
-### LLM API连接失败
-- 检查网络连接
-- 验证API端点地址
-- 确认LLM服务正在运行
-
-### 游戏卡住
-- 检查是否有玩家进入无限循环
-- 验证下注逻辑是否正确
-- 查看详细输出模式获取更多信息
-
-## 贡献
-
-欢迎提交Issue和Pull Request来改进这个项目！
-
-## 许可证
+## �� 许可证
 
 MIT License 
