@@ -1,436 +1,245 @@
-"""
-游戏管理器 - 整合LLM客户端和扑克游戏引擎
-"""
+# game_manager.py
 
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Tuple
 from llm_client import LLMClient
-from poker_game import PokerGame, Player, Action
-from config import PROMPT_CONFIG
+from poker_engine import PokerGame, Player
+from config import PROMPT_CONFIG, GAME_CONFIG, LLM_CONFIGS
 from logger import GameLogger
 import time
-
+import itertools
 
 class GameManager:
-    def __init__(self, num_players: int = 4, starting_chips: int = 1000):
-        self.game = PokerGame(num_players, starting_chips)
-        self.llm_clients = {}
+    def __init__(self, num_players: int, starting_chips: int):
+        llm_types = list(LLM_CONFIGS.keys())
+        llm_types_iter = itertools.cycle(llm_types)
+        player_configs = [
+            {"name": f"Player-{i+1}", "llm_type": next(llm_types_iter)}
+            for i in range(num_players)
+        ]
+        
+        self.game = PokerGame(
+            players_with_llm=player_configs,
+            starting_chips=starting_chips,
+            small_blind=GAME_CONFIG['small_blind'],
+            big_blind=GAME_CONFIG['big_blind']
+        )
+        self.llm_clients = {
+            llm_type: LLMClient(llm_type) for llm_type in llm_types
+        }
         self.system_prompt = PROMPT_CONFIG["system_prompt"]
-        
-        # 初始化日志记录器
         self.logger = GameLogger()
-        
-        # 初始化LLM客户端
-        self.llm_clients = {}
-        for llm_type in ["qwen3", "qwen2.5"]:
-            try:
-                self.llm_clients[llm_type] = LLMClient(llm_type)
-                print(f"✅ 初始化 {llm_type} 客户端成功")
-            except Exception as e:
-                print(f"❌ 初始化 {llm_type} 客户端失败: {e}")
-    
-    def play_hand(self, hand_num: int) -> Dict:
-        """玩一手牌"""
-        print("\n" + "="*50)
-        print("开始新的一手牌")
-        print("="*50)
-        
-        # 记录手牌开始
+        self.winner_stats = {p.name: 0 for p in self.game.players}
+        self.action_history = []
+
+    def play_game(self, num_hands: int):
+        for hand_num in range(1, num_hands + 1):
+            if len([p for p in self.game.players if p.chips > 0]) < 2:
+                print("\n游戏结束，只剩一位玩家！")
+                break
+            
+            print("\n" + "="*60)
+            print(f"手牌 #{hand_num}")
+            print("="*60)
+            self._play_hand(hand_num)
+            time.sleep(3)
+
+        final_chips = {p.name: p.chips for p in self.game.players}
+        self.logger.log_session_end(final_chips, self.winner_stats)
+        return self.get_final_results()
+
+    def _play_hand(self, hand_num: int):
+        self.action_history.clear()
         game_config = {
             "num_players": self.game.num_players,
-            "starting_chips": self.game.starting_chips,
+            "starting_chips": [p.initial_chips for p in self.game.players if p.name in self.winner_stats],
             "small_blind": self.game.small_blind,
             "big_blind": self.game.big_blind
         }
         self.logger.log_hand_start(hand_num, game_config)
         
-        # 重置游戏状态
-        self.game.reset_round()
-        
-        # 发手牌
-        self.game.deal_cards()
-        
-        # 收取盲注
-        self._collect_blinds()
-        
-        # 玩各个轮次
+        if not self.game.start_new_hand(): return
+
+        print(f"庄家(D): {self.game.get_player(self.game.dealer_pos).name}")
+        for p in self.game.players:
+            if p.chips > 0: print(f"{p.name}: 手牌 [{' '.join(map(str, p.hand))}]")
+
         rounds = ["preflop", "flop", "turn", "river"]
         for round_name in rounds:
-            if not self._play_round(round_name):
+            if len([p for p in self.game.players if p.is_active]) < 2: break
+            
+            self.action_history.append(f"\n--- {round_name.upper()} 轮 ---")
+            print(f"\n--- {round_name.upper()} 轮 ---")
+            if round_name != 'preflop': self.game.deal_community(3 if round_name == 'flop' else 1)
+            
+            print(f"公共牌: [{' '.join(map(str, self.game.community_cards))}]")
+            self.logger.log_round_start(round_name, [str(c) for c in self.game.community_cards])
+            
+            self._run_betting_round(round_name)
+        
+        self.game.collect_bets_and_manage_pots()
+        self._showdown()
+        
+        print("\n--- 手牌结束 筹码情况 ---")
+        for p in self.game.players:
+            print(f"{p.name}: {p.chips}")
+        
+        final_chips = {p.name: p.chips for p in self.game.players}
+        self.logger.log_hand_end(final_chips)
+
+    def _run_betting_round(self, round_name: str):
+        self.game.start_betting_round(round_name)
+        if self.game.action_player_idx == -1: return
+
+        if round_name == 'preflop':
+            sb_player = self.game.get_player(self.game.small_blind_pos)
+            bb_player = self.game.get_player(self.game.big_blind_pos)
+            self.action_history.append(f"{sb_player.name}(SB) 下小盲 {self.game.small_blind}")
+            self.action_history.append(f"{bb_player.name}(BB) 下大盲 {self.game.big_blind}")
+
+        num_active_players = len([p for p in self.game.players if p.is_active])
+        acted_players = set()
+        
+        while True:
+            player = self.game.get_player(self.game.action_player_idx)
+            
+            # 轮次结束条件
+            all_acted = len(acted_players) >= num_active_players
+            all_bets_matched = all(p.bet_in_round == self.game.current_bet for p in self.game.players if p.is_active and not p.is_all_in)
+            action_on_raiser = player == self.game.last_raiser
+
+            if (action_on_raiser or all_acted) and all_bets_matched and self.game.current_bet > 0:
                 break
-        
-        # 摊牌和分配底池
-        winners = self.game.get_winner()
-        self._showdown(winners)
-        
-        # 记录手牌结束
-        final_state = {
-            "winners": [w.name for w in winners],
-            "pot": self.game.pot,
-            "final_state": self.game.get_game_state_text(),
-            "player_chips": {p.name: p.chips for p in self.game.players}
-        }
-        self.logger.log_hand_end(final_state)
-        
-        return final_state
-    
-    def _collect_blinds(self):
-        """收取盲注"""
-        # 小盲注
-        sb_pos = (self.game.dealer_pos + 1) % self.game.num_players
-        sb_player = self.game.players[sb_pos]
-        sb_amount = min(self.game.small_blind, sb_player.chips)
-        sb_player.chips -= sb_amount
-        sb_player.current_bet = sb_amount
-        self.game.pot += sb_amount
-        
-        # 大盲注
-        bb_pos = (self.game.dealer_pos + 2) % self.game.num_players
-        bb_player = self.game.players[bb_pos]
-        bb_amount = min(self.game.big_blind, bb_player.chips)
-        bb_player.chips -= bb_amount
-        bb_player.current_bet = bb_amount
-        self.game.pot += bb_amount
-        
-        self.game.current_bet = bb_amount
-        
-        # 设置位置信息
-        self.game.small_blind_pos = sb_pos
-        self.game.big_blind_pos = bb_pos
-        
-        # preflop从大盲位置的下一个玩家开始（UTG位置）
-        self.game.current_player = (bb_pos + 1) % self.game.num_players
-        
-        print(f"收取盲注: {sb_player.name} 小盲 {sb_amount}, {bb_player.name} 大盲 {bb_amount}")
-        print(f"位置: 庄家={self.game.players[self.game.dealer_pos].name}, "
-              f"小盲={sb_player.name}, 大盲={bb_player.name}")
-    
-    def _play_round(self, round_name: str) -> bool:
-        """玩一个轮次"""
-        print(f"\n--- {round_name.upper()} 轮 ---")
-        
-        # 如果是flop轮，发公共牌
-        if round_name == "flop":
-            self.game.deal_community_cards(3)
-            print(f"发公共牌: {' '.join([str(card) for card in self.game.community_cards])}")
-        elif round_name in ["turn", "river"]:
-            self.game.deal_community_cards(1)
-            print(f"发公共牌: {' '.join([str(card) for card in self.game.community_cards])}")
-        
-        # 记录轮次开始
-        game_state = self.game.get_game_state_text()
-        community_cards = [str(card) for card in self.game.community_cards]
-        self.logger.log_round_start(round_name, game_state, community_cards)
-        
-        # 重置下注（除了preflop轮）
-        if round_name != "preflop":
-            self.game.current_bet = 0
-            for player in self.game.players:
-                player.current_bet = 0
-            print("重置下注")
-        
-        # 设置起始玩家
-        if round_name == "preflop":
-            # preflop从大盲位置的下一个玩家开始
-            self.game.current_player = (self.game.big_blind_pos + 1) % self.game.num_players
-        else:
-            # 其他轮次从小盲位置开始
-            self.game.current_player = self.game.small_blind_pos
-        
-        # 找到第一个活跃玩家
-        while not self.game.players[self.game.current_player].is_active:
-            self.game.current_player = (self.game.current_player + 1) % self.game.num_players
-        
-        print(f"起始玩家: {self.game.players[self.game.current_player].name}")
-        
-        # 进行下注轮次
-        round_complete = False
-        start_player = self.game.current_player
-        last_raiser = None  # 记录最后一个加注的玩家
-        round_started = False  # 标记轮次是否已经开始
-        
-        # 在preflop轮中，标记大盲注还没有行动过
-        if round_name == "preflop":
-            self.big_blind_acted = False
-            # 如果大盲注是起始玩家，说明没有其他玩家行动，大盲注已经行动过了
-            if self.game.current_player == self.game.big_blind_pos:
-                self.big_blind_acted = True
-        
-        while not round_complete:
-            current_player = self.game.players[self.game.current_player]
-            
-            if not current_player.is_active or current_player.is_all_in:
-                self.game.current_player = (self.game.current_player + 1) % self.game.num_players
-                # 如果回到起始玩家，轮次结束
-                if self.game.current_player == start_player:
-                    round_complete = True
-                continue
-            
-            # 获取LLM决策
-            action, llm_input, llm_output = self._get_player_action(current_player)
-            
-            # 执行动作
-            action_result = self._execute_action(current_player, action)
-            
-            # 记录玩家动作
-            player_hand = [str(card) for card in current_player.hand]
-            self.logger.log_player_action(
-                current_player.name, 
-                player_hand, 
-                llm_input, 
-                llm_output, 
-                action, 
-                action_result
-            )
-            
-            if not action_result:
+            if all_acted and self.game.current_bet == 0: # 所有人都过牌
                 break
+
+            acted_players.add(player)
             
-            # 标记轮次已经开始
-            round_started = True
+            action_dict, llm_input, llm_output = self._get_player_action(player)
             
-            # 检查是否有加注
-            if action_result["action_type"] in ["raise", "all-in"]:
-                last_raiser = current_player
-                # 重置起始玩家为加注玩家的下一个
-                start_player = (self.game.current_player + 1) % self.game.num_players
-                # 找到下一个活跃玩家作为新的起始玩家
-                while not self.game.players[start_player].is_active:
-                    start_player = (start_player + 1) % self.game.num_players
-                # 如果起始玩家就是当前玩家，说明只有两个玩家，但轮次还没有结束
-                # 需要让另一个玩家有机会回应加注
-                if start_player == self.game.current_player:
-                    # 继续轮次，让另一个玩家有机会回应
-                    print(f"加注后继续轮次，等待玩家回应")
+            action_msg = self.game.handle_action(player, action_dict['action'], action_dict.get('amount', 0))
+            print(action_msg)
+            self.action_history.append(action_msg)
             
-            # 移动到下一个玩家
-            self.game.current_player = (self.game.current_player + 1) % self.game.num_players
+            self.logger.log_player_action(player.name, player.hand, llm_input, llm_output, action_dict, action_msg)
             
-            # 检查是否只剩一个玩家
-            active_players = [p for p in self.game.players if p.is_active]
-            if len(active_players) <= 1:
-                return False
-            
-            # 检查轮次是否完成（回到起始玩家且所有下注相等）
-            if self.game.current_player == start_player and round_started:
-                if self.game.is_round_complete():
-                    # 在preflop轮中，如果大盲注还没有行动过，需要给大盲注一次机会
-                    if round_name == "preflop" and not self.big_blind_acted:
-                        # 标记大盲注已经行动过
-                        self.big_blind_acted = True
-                        print(f"大盲注还有一次行动机会")
-                        round_complete = False
-                    else:
-                        round_complete = True
-                        print(f"轮次完成，所有玩家下注均衡")
-                else:
-                    # 如果下注不均衡，继续轮次
-                    print(f"下注不均衡，继续轮次等待玩家回应")
-        
-        return True
-    
+            if len([p for p in self.game.players if p.is_active]) < 2: break
+
+            self.game.action_player_idx = self.game.get_next_active_player_idx(self.game.action_player_idx)
+            if self.game.action_player_idx == -1: break
+
     def _get_player_action(self, player: Player) -> tuple:
-        """获取玩家动作"""
-        # 构建游戏状态描述
-        game_state = self.game.get_game_state_text()
-        player_hand = self.game.get_player_hand_text(player)
+        valid_actions = self._get_valid_actions(player)
+        game_state_text = self._get_game_state_text(player)
         
-        # 添加当前玩家特定信息
-        current_bet_to_call = self.game.current_bet - player.current_bet
-        
-        # 确定当前玩家的位置
-        player_pos = ""
-        for i, p in enumerate(self.game.players):
-            if p == player:
-                if i == self.game.dealer_pos:
-                    player_pos = "(庄家)"
-                elif i == self.game.small_blind_pos:
-                    player_pos = "(小盲)"
-                elif i == self.game.big_blind_pos:
-                    player_pos = "(大盲)"
-                else:
-                    player_pos = "(其他)"
-                break
-        
-        game_state += f"\n当前玩家: {player.name}{player_pos}"
-        game_state += f"\n需要跟注: {current_bet_to_call} 筹码"
-        game_state += f"\n你的筹码: {player.chips}"
-        
-        # 获取LLM决策
         llm_client = self.llm_clients[player.llm_type]
-        action, llm_input, llm_output = llm_client.get_action(game_state, player_hand, self.system_prompt)
+        parsed_action, llm_input, raw_output = llm_client.get_action(
+            game_state_text, f"[{' '.join(map(str, player.hand))}]", self.system_prompt
+        )
         
-        print(f"{player.name} 的动作: {action}")
-        return action, llm_input, llm_output
-    
-    def _execute_action(self, player: Player, action: str) -> Dict[str, Any]:
-        """执行玩家动作"""
-        action_lower = action.lower()
-        current_bet_to_call = self.game.current_bet - player.current_bet
+        # 验证LLM动作
+        action_name = parsed_action['action']
+        if action_name not in valid_actions:
+            # 如果LLM意图是check但不能check，强制call或fold
+            if action_name == 'check' and valid_actions.get('call', 0) > 0:
+                parsed_action = {'action': 'call'}
+            else: # 其他非法动作，强制fold
+                parsed_action = {'action': 'fold'}
         
-        action_result = {
-            "action_type": "unknown",
-            "amount": 0,
-            "success": True,
-            "message": ""
-        }
+        if action_name == 'raise':
+            amount = parsed_action.get('amount', 0)
+            min_r, max_r = valid_actions['raise']['min'], valid_actions['raise']['max']
+            # 修正加注额到合法范围
+            parsed_action['amount'] = max(min_r, min(amount, max_r))
+            
+        return parsed_action, llm_input, raw_output
+
+    def _get_valid_actions(self, player: Player) -> Dict:
+        actions = {}
+        to_call = self.game.current_bet - player.bet_in_round
         
-        if "fold" in action_lower:
-            player.is_active = False
-            action_result["action_type"] = "fold"
-            action_result["message"] = f"{player.name} 弃牌"
-            print(f"{player.name} 弃牌")
-            
-        elif "check" in action_lower:
-            if current_bet_to_call > 0:
-                action_result["message"] = f"{player.name} 不能过牌，需要跟注 {current_bet_to_call}"
-                print(f"{player.name} 不能过牌，需要跟注 {current_bet_to_call}")
-                # 强制跟注
-                call_amount = min(current_bet_to_call, player.chips)
-                player.chips -= call_amount
-                player.current_bet += call_amount
-                self.game.pot += call_amount
-                action_result["action_type"] = "call"
-                action_result["amount"] = call_amount
-                action_result["message"] = f"{player.name} 跟注 {call_amount}"
-                print(f"{player.name} 跟注 {call_amount}")
-            else:
-                action_result["action_type"] = "check"
-                action_result["message"] = f"{player.name} 过牌"
-                print(f"{player.name} 过牌")
-                
-        elif "call" in action_lower:
-            call_amount = min(current_bet_to_call, player.chips)
-            player.chips -= call_amount
-            player.current_bet += call_amount
-            self.game.pot += call_amount
-            action_result["action_type"] = "call"
-            action_result["amount"] = call_amount
-            action_result["message"] = f"{player.name} 跟注 {call_amount}"
-            print(f"{player.name} 跟注 {call_amount}")
-            
-        elif "raise" in action_lower or "all-in" in action_lower or "allin" in action_lower:
-            llm_client = self.llm_clients[player.llm_type]
-            max_raise = player.chips
-            
-            if "all-in" in action_lower or "allin" in action_lower:
-                raise_amount = max_raise
-                action_result["action_type"] = "all-in"
-            else:
-                raise_amount = llm_client.get_raise_amount(action, max_raise)
-                if raise_amount == 0:
-                    raise_amount = max_raise // 2  # 默认加注一半筹码
-                action_result["action_type"] = "raise"
-            
-            # 计算实际需要投入的筹码（增量）
-            current_bet_to_call = self.game.current_bet - player.current_bet
-            
-            # 如果LLM返回的是总下注金额，需要转换为增量
-            if raise_amount > current_bet_to_call:
-                # LLM返回的是总下注金额
-                total_bet_needed = raise_amount
-            else:
-                # LLM返回的是增量
-                total_bet_needed = self.game.current_bet + raise_amount
-            
-            # 确保加注金额合理
-            min_raise = self.game.current_bet + self.game.big_blind
-            total_bet_needed = max(total_bet_needed, min_raise)
-            total_bet_needed = min(total_bet_needed, player.current_bet + max_raise)
-            
-            # 计算实际投入的筹码
-            actual_bet_amount = total_bet_needed - player.current_bet
-            
-            player.chips -= actual_bet_amount
-            player.current_bet = total_bet_needed
-            self.game.pot += actual_bet_amount
-            self.game.current_bet = total_bet_needed
-            action_result["amount"] = actual_bet_amount
-            
-            if raise_amount == max_raise:
-                player.is_all_in = True
-                action_result["message"] = f"{player.name} 全下 {raise_amount}"
-                print(f"{player.name} 全下 {raise_amount}")
-            else:
-                action_result["message"] = f"{player.name} 加注到 {raise_amount}"
-                print(f"{player.name} 加注到 {raise_amount}")
-        
-        # 检查玩家是否全下
-        if player.chips == 0:
-            player.is_all_in = True
-        
-        return action_result
-    
-    def _showdown(self, winners: List[Player]):
-        """摊牌和分配底池"""
-        print(f"\n--- 摊牌 ---")
-        print(f"底池: {self.game.pot} 筹码")
-        
-        # 收集玩家信息用于日志
-        players_info = []
-        for player in self.game.players:
-            if player.is_active:
-                hand_text = self.game.get_player_hand_text(player)
-                print(f"{player.name}: {hand_text}")
-                players_info.append({
-                    "name": player.name,
-                    "hand": hand_text,
-                    "chips": player.chips,
-                    "is_active": player.is_active
-                })
-        
-        if winners:
-            winner_names = [w.name for w in winners]
-            print(f"获胜者: {', '.join(winner_names)}")
-            self.game.distribute_pot(winners)
-            
-            for winner in winners:
-                print(f"{winner.name} 获得筹码，当前筹码: {winner.chips}")
+        if to_call == 0:
+            actions['check'] = True
         else:
-            print("没有获胜者")
-            winner_names = []
+            actions['call'] = min(to_call, player.chips)
         
-        # 记录摊牌信息
-        self.logger.log_showdown(players_info, winner_names, self.game.pot)
-    
-    def play_game(self, num_hands: int = 10):
-        """玩多手牌"""
-        print(f"开始 {num_hands} 手牌的德州扑克游戏")
-        print(f"玩家数量: {self.game.num_players}")
-        print(f"起始筹码: {self.game.starting_chips}")
+        actions['fold'] = True
+        actions['all-in'] = True
+
+        min_raise_total = self.game.current_bet + self.game.min_raise_amount
+        max_raise_total = player.chips + player.bet_in_round
+        if max_raise_total >= min_raise_total:
+            actions['raise'] = {'min': min_raise_total, 'max': max_raise_total}
         
-        results = []
-        for hand_num in range(1, num_hands + 1):
-            print(f"\n第 {hand_num} 手牌")
-            result = self.play_hand(hand_num)
-            results.append(result)
-            
-            # 显示玩家筹码状态
-            print("\n玩家筹码状态:")
-            for player in self.game.players:
-                print(f"  {player.name}: {player.chips} 筹码")
-            
-            # 检查是否有玩家出局
-            active_players = [p for p in self.game.players if p.chips > 0]
-            if len(active_players) <= 1:
-                print(f"\n游戏结束！只剩 {len(active_players)} 个玩家有筹码")
-                break
-            
-            time.sleep(1)  # 短暂暂停
+        return actions
+
+    def _get_game_state_text(self, current_player: Player) -> str:
+        state = []
+        state.append(f"底池总额: {sum(p.bet_in_hand for p in self.game.players)}")
+        state.append(f"公共牌: [{' '.join(map(str, self.game.community_cards))}]")
         
-        # 记录会话结束
-        final_results = {
-            "total_hands": len(results),
+        state.append("\n--- 玩家信息 ---")
+        for i, p in enumerate(self.game.players):
+            pos_info = ""
+            if i == self.game.dealer_pos: pos_info += "(D)"
+            if hasattr(self.game, 'small_blind_pos') and i == self.game.small_blind_pos: pos_info += "(SB)"
+            if hasattr(self.game, 'big_blind_pos') and i == self.game.big_blind_pos: pos_info += "(BB)"
+
+            if p.is_active:
+                player_status = f"初始:{p.chips_at_start_of_hand}, 已下注:{p.bet_in_hand}, 剩余:{p.chips}"
+            else:
+                player_status = "已弃牌"
+
+            line = f"- {p.name}{pos_info}: {player_status}"
+            if p == current_player: line += " (你)"
+            state.append(line)
+        
+        if self.action_history:
+            state.append("\n--- 本手牌下注历史 ---")
+            state.extend(self.action_history)
+
+        state.append("\n--- 你的回合 ---")
+        to_call = self.game.current_bet - current_player.bet_in_round
+        clipped_to_call = min(to_call, current_player.chips)
+        state.append(f"本手牌初始筹码: {current_player.chips_at_start_of_hand}")
+        state.append(f"已下注筹码: {current_player.bet_in_hand}")
+        state.append(f"剩余筹码: {current_player.chips}")
+        state.append(f"需要跟注: {clipped_to_call}")
+        
+        return "\n".join(state)
+        
+    def _showdown(self):
+        print("\n--- 摊牌 ---")
+        active_players = [p for p in self.game.players if p.is_active]
+        if len(active_players) == 1:
+            winner = active_players[0]
+            total_pot = sum(pot['amount'] for pot in self.game.pots)
+            winner.chips += total_pot
+            print(f"{winner.name} 是唯一幸存者, 赢得底池 {total_pot}")
+            self.winner_stats[winner.name] += 1
+            
+            # 修正pot结构以包含eligible_players
+            pot_details = {
+                'amount': total_pot,
+                'eligible_players': active_players 
+            }
+            self.logger.log_showdown([{'pot': pot_details, 'winners': [winner], 'hand_details': ('未摊牌', [])}])
+            return
+        
+        winner_results = self.game.determine_winners()
+        self.logger.log_showdown(winner_results)
+
+        for res in winner_results:
+            pot_amt = res['pot']['amount']
+            winners = res['winners']
+            details = res['hand_details']
+            print(f"底池 {pot_amt} 由 {', '.join([w.name for w in winners])} 赢得")
+            print(f"  牌型: {details[0]} - {' '.join(map(str, details[1]))}")
+            for w in winners: self.winner_stats[w.name] += 1
+        
+        self.game.distribute_winnings(winner_results)
+
+    def get_final_results(self):
+        return {
             "final_chips": {p.name: p.chips for p in self.game.players},
-            "winner_stats": self._calculate_winner_stats(results)
+            "winner_stats": self.winner_stats
         }
-        self.logger.log_session_end(final_results)
-        
-        return results
-    
-    def _calculate_winner_stats(self, results: List[Dict]) -> Dict[str, int]:
-        """计算获胜统计"""
-        winner_stats = {}
-        for result in results:
-            for winner in result["winners"]:
-                winner_stats[winner] = winner_stats.get(winner, 0) + 1
-        return winner_stats 
